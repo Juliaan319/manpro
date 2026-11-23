@@ -1,0 +1,226 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  LAB_ADMIN
+  HEAD_LAB
+}
+
+enum UserType {
+  STUDENT
+  LECTURER
+  STAFF
+  EXTERNAL
+}
+
+enum PCStatus {
+  REMOTE
+  AVAILABLE
+  RESERVED
+  IN_USE
+  MAINTENANCE
+  UNAVAILABLE
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  COMPLETED
+  EXPIRED
+}
+
+enum SessionStatus {
+  ACTIVE
+  COMPLETED
+  CORRECTED
+}
+
+model User {
+  id             String              @id @default(cuid())
+  name           String
+  email          String              @unique
+  googleSubject  String?             @unique
+  passwordHash   String
+  role           Role                @default(USER)
+  userType       UserType
+  identity       String?             @unique
+  institution    String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  requests       PCBorrowRequest[]   @relation("Owner")
+  reviews        PCBorrowRequest[]   @relation("Reviewer")
+  attendance     AttendanceSession[]
+  remoteRequests RemoteRequest[]     @relation("RemoteOwner")
+  remoteReviews  RemoteRequest[]     @relation("RemoteReviewer")
+  audits         AuditLog[]
+}
+
+model Laboratory {
+  qrVersion   Int                 @default(0)
+  id          String              @id @default(cuid())
+  code        String              @unique
+  name        String
+  description String
+  location    String
+  active      Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  pcs         PC[]
+  requests    PCBorrowRequest[]
+  attendance  AttendanceSession[]
+}
+
+model PC {
+  id             String              @id @default(cuid())
+  code           String              @unique
+  laboratoryId   String
+  laboratory     Laboratory          @relation(fields: [laboratoryId], references: [id])
+  name           String
+  description    String
+  cpu            String
+  ram            String
+  gpu            String?
+  vram           Int?
+  status         PCStatus            @default(AVAILABLE)
+  monitoring     Boolean             @default(false)
+  lastHeartbeat  DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  requests       PCBorrowRequest[]
+  attendance     AttendanceSession[]
+  telemetry      PCTelemetry[]
+  remoteRequests RemoteRequest[]
+  credential     DeviceCredential?
+}
+
+model PCBorrowRequest {
+  id              String             @id @default(cuid())
+  userId          String
+  user            User               @relation("Owner", fields: [userId], references: [id])
+  laboratoryId    String
+  laboratory      Laboratory         @relation(fields: [laboratoryId], references: [id])
+  pcId            String
+  pc              PC                 @relation(fields: [pcId], references: [id])
+  startAt         DateTime           @db.Timestamptz(3)
+  endAt           DateTime           @db.Timestamptz(3)
+  purpose         String
+  status          RequestStatus      @default(PENDING)
+  reviewerId      String?
+  reviewer        User?              @relation("Reviewer", fields: [reviewerId], references: [id])
+  reviewedAt      DateTime?
+  rejectionReason String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  attendance      AttendanceSession?
+
+  @@index([pcId, startAt, endAt])
+  @@index([userId, status])
+}
+
+model AttendanceSession {
+  id               String           @id @default(cuid())
+  userId           String
+  user             User             @relation(fields: [userId], references: [id])
+  laboratoryId     String
+  laboratory       Laboratory       @relation(fields: [laboratoryId], references: [id])
+  pcId             String?
+  pc               PC?              @relation(fields: [pcId], references: [id])
+  reservationId    String?          @unique
+  reservation      PCBorrowRequest? @relation(fields: [reservationId], references: [id])
+  purpose          String
+  checkIn          DateTime         @default(now())
+  checkOut         DateTime?
+  durationMinutes  Int?
+  status           SessionStatus    @default(ACTIVE)
+  attendanceDay    String?
+  correctionReason String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@unique([userId, laboratoryId, attendanceDay])
+  @@index([laboratoryId, checkIn])
+}
+
+model PCTelemetry {
+  id             String   @id @default(cuid())
+  pcId           String
+  pc             PC       @relation(fields: [pcId], references: [id])
+  recordedAt     DateTime @default(now())
+  simulated      Boolean  @default(false)
+  cpuPercent     Float?
+  ramPercent     Float?
+  gpuName        String?
+  gpuPercent     Float?
+  gpuMemoryUsed  Float?
+  gpuMemoryTotal Float?
+  gpuTemperature Float?
+  gpuPower       Float?
+
+  @@index([pcId, recordedAt])
+}
+
+model DeviceCredential {
+  id         String   @id @default(cuid())
+  pcId       String   @unique
+  pc         PC       @relation(fields: [pcId], references: [id])
+  secretHash String
+  simulated  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String
+  actor     User     @relation(fields: [actorId], references: [id])
+  action    String
+  entityId  String
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model RateLimit {
+  key     String   @id
+  count   Int
+  resetAt DateTime
+}
+
+model RemoteRequest {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation("RemoteOwner", fields: [userId], references: [id])
+  pcId            String
+  pc              PC            @relation(fields: [pcId], references: [id])
+  startAt         DateTime      @db.Timestamptz(3)
+  endAt           DateTime      @db.Timestamptz(3)
+  purpose         String
+  status          RequestStatus @default(PENDING)
+  reviewerId      String?
+  reviewer        User?         @relation("RemoteReviewer", fields: [reviewerId], references: [id])
+  reviewedAt      DateTime?
+  rejectionReason String?
+  accessUrl       String?
+  fileName        String
+  fileBytes       Bytes
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([pcId, startAt, endAt])
+  @@index([userId, status])
+}
+
+model RemotePolicy {
+  id          String   @id @default("main")
+  templateUrl String?
+  updatedAt   DateTime @updatedAt
+}
